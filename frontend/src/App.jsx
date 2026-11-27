@@ -6,6 +6,7 @@ import {
 import './App.css'
 import Segments from './Segments'
 import Forecast from './Forecast'
+import Reorder from './Reorder'
 
 const API = 'http://localhost:8000'
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })
@@ -113,11 +114,11 @@ export default function App() {
               <h2>Monthly revenue</h2>
               <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={data.trend}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eef0f4" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3e3d3" />
                   <XAxis dataKey="month" fontSize={12} />
                   <YAxis fontSize={12} tickFormatter={(v) => v / 1000 + 'k'} />
                   <Tooltip formatter={(v) => inr(v)} />
-                  <Line type="monotone" dataKey="revenue" stroke="#2563eb" strokeWidth={2} />
+                  <Line type="monotone" dataKey="revenue" stroke="#ea580c" strokeWidth={2} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -126,11 +127,11 @@ export default function App() {
               <h2>Top products by revenue</h2>
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={data.top} layout="vertical" margin={{ left: 30 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eef0f4" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3e3d3" />
                   <XAxis type="number" fontSize={12} tickFormatter={(v) => v / 1000 + 'k'} />
                   <YAxis type="category" dataKey="name" fontSize={11} width={110} />
                   <Tooltip formatter={(v) => inr(v)} />
-                  <Bar dataKey="revenue" fill="#16a34a" />
+                  <Bar dataKey="revenue" fill="#d97706" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -162,6 +163,7 @@ export default function App() {
         </>
       )}
 
+      <Reorder categoryId={categoryId} />
       <Forecast categoryId={categoryId} />
       <Segments />
     </div>

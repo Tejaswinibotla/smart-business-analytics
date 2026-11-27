@@ -249,3 +249,73 @@ def forecast(category_id: Optional[int] = None, months: int = 3):
         "trend_per_month": round(float(slope)),
         "typical_error_pct": round(error_pct, 1),
     }
+# ---------- Reorder suggestions ----------
+
+from math import ceil
+
+LEAD_TIME_DAYS = 7   # assumed supplier delivery time
+COVER_DAYS = 30      # each order should cover this many days of sales
+
+
+@app.get("/api/reorder")
+def reorder(category_id: Optional[int] = None):
+    rows = run_query("""
+        SELECT p.sku, p.name, p.cost_price, sup.name AS supplier,
+               st.stock, COALESCE(v.units, 0) AS units_30d
+        FROM products p
+        JOIN v_current_stock st ON st.product_id = p.id
+        LEFT JOIN suppliers sup ON sup.id = p.supplier_id
+        LEFT JOIN (
+            SELECT oi.product_id, SUM(oi.quantity) AS units
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            WHERE o.status = 'completed'
+              AND o.order_date >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
+            GROUP BY oi.product_id
+        ) v ON v.product_id = p.id
+        WHERE p.is_active = TRUE AND (%s IS NULL OR p.category_id = %s)
+    """, [category_id, category_id])
+
+    items = []
+    for r in rows:
+        stock = int(r["stock"])
+        daily = float(r["units_30d"]) / 30          # units sold per day
+        days_left = stock / daily if daily > 0 else None
+
+        if daily == 0:
+            status = "No recent sales"
+        elif stock <= 0 or days_left <= LEAD_TIME_DAYS:
+            status = "Order now"                    # will run out before a delivery arrives
+        elif days_left <= LEAD_TIME_DAYS + 14:
+            status = "Order soon"
+        else:
+            status = "Healthy"
+
+        # Enough to cover the lead time plus COVER_DAYS of sales, minus what we have
+        qty = max(0, ceil(daily * (LEAD_TIME_DAYS + COVER_DAYS) - stock))
+        if status in ("Healthy", "No recent sales"):
+            qty = 0
+
+        items.append({
+            "sku": r["sku"],
+            "name": r["name"],
+            "supplier": r["supplier"],
+            "stock": stock,
+            "daily_sales": round(daily, 1),
+            "days_left": round(days_left, 1) if days_left is not None else None,
+            "status": status,
+            "suggested_qty": qty,
+            "est_cost": round(qty * float(r["cost_price"])),
+        })
+
+    # Most urgent first (no recent sales goes to the bottom)
+    items.sort(key=lambda i: i["days_left"] if i["days_left"] is not None else 10**9)
+
+    return {
+        "lead_time_days": LEAD_TIME_DAYS,
+        "cover_days": COVER_DAYS,
+        "order_now": sum(1 for i in items if i["status"] == "Order now"),
+        "order_soon": sum(1 for i in items if i["status"] == "Order soon"),
+        "total_cost": sum(i["est_cost"] for i in items),
+        "items": items[:10],
+    }
