@@ -1,7 +1,9 @@
 import json
 import os
+from datetime import date
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import pymysql
 from dotenv import load_dotenv
@@ -193,4 +195,57 @@ def customer_segments():
     return {
         "segments": json.loads(summary.to_json(orient="records")),
         "at_risk": json.loads(at_risk.to_json(orient="records")),
+    }
+
+
+# ---------- Revenue forecast ----------
+
+@app.get("/api/forecast")
+def forecast(category_id: Optional[int] = None, months: int = 3):
+    """Fit a straight-line trend to monthly revenue and project it forward."""
+    months = max(1, min(months, 6))
+    where, params = order_filters(None, None, category_id)
+    rows = run_query(f"""
+        SELECT DATE_FORMAT(o.order_date, '%%Y-%%m') AS month,
+               SUM(oi.quantity * oi.unit_price) AS revenue
+        {BASE} WHERE {where}
+        GROUP BY month ORDER BY month
+    """, params)
+    first = run_query("SELECT MIN(order_date) AS d FROM orders")[0]["d"]
+
+    empty = {"history": [], "forecast": [], "trend_per_month": 0, "typical_error_pct": 0}
+    if not rows or first is None:
+        return empty
+
+    # Only use complete months: skip the current one and a partial first one
+    skip = {date.today().strftime("%Y-%m")}
+    if first.day > 1:
+        skip.add(first.strftime("%Y-%m"))
+    history = [{"month": r["month"], "revenue": float(r["revenue"])}
+               for r in rows if r["month"] not in skip]
+    if len(history) < 4:
+        return {**empty, "history": history}
+
+    y = np.array([h["revenue"] for h in history])
+    x = np.arange(len(y))
+    slope, intercept = np.polyfit(x, y, 1)
+    resid = y - (slope * x + intercept)
+    spread = float(np.std(resid, ddof=2))
+    error_pct = float(np.mean(np.abs(resid)) / np.mean(y) * 100)
+
+    future = []
+    for i in range(1, months + 1):
+        value = max(0.0, slope * (len(y) - 1 + i) + intercept)
+        future.append({
+            "month": str(pd.Period(history[-1]["month"], "M") + i),
+            "revenue": round(value),
+            "low": round(max(0.0, value - 1.28 * spread)),
+            "high": round(value + 1.28 * spread),
+        })
+
+    return {
+        "history": history,
+        "forecast": future,
+        "trend_per_month": round(float(slope)),
+        "typical_error_pct": round(error_pct, 1),
     }

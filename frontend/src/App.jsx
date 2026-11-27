@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import './App.css'
 import Segments from './Segments'
+import Forecast from './Forecast'
 
 const API = 'http://localhost:8000'
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })
@@ -161,6 +162,7 @@ export default function App() {
         </>
       )}
 
+      <Forecast categoryId={categoryId} />
       <Segments />
     </div>
   )
