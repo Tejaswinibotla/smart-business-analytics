@@ -1,6 +1,8 @@
+import json
 import os
 from typing import Optional
 
+import pandas as pd
 import pymysql
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -120,3 +122,75 @@ def low_stock(category_id: Optional[int] = None):
         WHERE (%s IS NULL OR p.category_id = %s)
         ORDER BY s.stock ASC LIMIT 8
     """, [category_id, category_id])
+
+
+# ---------- Customer segmentation (RFM) ----------
+
+SEGMENT_ORDER = ["Champions", "Loyal", "Promising",
+                 "Needs attention", "At risk", "Hibernating"]
+
+
+def rfm_label(r, f, m):
+    """r, f, m are scores from 1 (worst) to 5 (best)."""
+    fm = (f + m) / 2
+    if r >= 4 and fm >= 4:
+        return "Champions"        # recent, frequent, high spend
+    if r >= 3 and fm >= 3:
+        return "Loyal"            # regular, good spend
+    if r >= 4:
+        return "Promising"        # recent but low spend so far
+    if r == 3:
+        return "Needs attention"  # average, starting to cool off
+    if fm >= 3:
+        return "At risk"          # good customers who went quiet
+    return "Hibernating"          # low spend and gone quiet
+
+
+@app.get("/api/customer-segments")
+def customer_segments():
+    rows = run_query("""
+        SELECT c.id, c.name, c.city,
+               DATEDIFF(CURDATE(), MAX(o.order_date)) AS recency,
+               COUNT(DISTINCT o.id) AS frequency,
+               SUM(oi.quantity * oi.unit_price) AS monetary
+        FROM customers c
+        JOIN orders o ON o.customer_id = c.id AND o.status = 'completed'
+        JOIN order_items oi ON oi.order_id = o.id
+        GROUP BY c.id, c.name, c.city
+    """)
+    if len(rows) < 5:
+        return {"segments": [], "at_risk": []}
+
+    df = pd.DataFrame(rows)
+    df["recency"] = df["recency"].astype(int)
+    df["frequency"] = df["frequency"].astype(int)
+    df["monetary"] = df["monetary"].astype(float)
+
+    # Score each customer 1-5 (rank first so ties never break the bins)
+    df["r"] = pd.qcut(df["recency"].rank(method="first"), 5, labels=[5, 4, 3, 2, 1]).astype(int)
+    df["f"] = pd.qcut(df["frequency"].rank(method="first"), 5, labels=[1, 2, 3, 4, 5]).astype(int)
+    df["m"] = pd.qcut(df["monetary"].rank(method="first"), 5, labels=[1, 2, 3, 4, 5]).astype(int)
+    df["segment"] = [rfm_label(r, f, m) for r, f, m in zip(df["r"], df["f"], df["m"])]
+
+    summary = (
+        df.groupby("segment")
+        .agg(customers=("id", "count"), revenue=("monetary", "sum"),
+             avg_recency=("recency", "mean"))
+        .reindex(SEGMENT_ORDER)
+        .dropna()
+        .reset_index()
+    )
+    summary["customers"] = summary["customers"].astype(int)
+    summary["revenue"] = summary["revenue"].round(0)
+    summary["avg_recency"] = summary["avg_recency"].round(0)
+
+    at_risk = (
+        df[df["segment"] == "At risk"]
+        .sort_values("monetary", ascending=False)
+        .head(8)[["name", "city", "recency", "frequency", "monetary"]]
+    )
+
+    return {
+        "segments": json.loads(summary.to_json(orient="records")),
+        "at_risk": json.loads(at_risk.to_json(orient="records")),
+    }

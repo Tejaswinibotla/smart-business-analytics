@@ -4,6 +4,7 @@ import {
   CartesianGrid, Tooltip, ResponsiveContainer,
 } from 'recharts'
 import './App.css'
+import Segments from './Segments'
 
 const API = 'http://localhost:8000'
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN', { maximumFractionDigits: 0 })
@@ -159,6 +160,8 @@ export default function App() {
           </div>
         </>
       )}
+
+      <Segments />
     </div>
   )
 }
